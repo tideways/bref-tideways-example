@@ -1,0 +1,118 @@
+service: tideways
+
+provider:
+    name: aws
+    region: eu-west-1
+    runtime: provided.al2
+    deploymentMethod: direct
+    # We configure Tideways via environment variables
+    # It could also be configured via php.ini (https://bref.sh/docs/environment/php.html#phpini)
+    environment:
+        # Set your API key here
+        # Read about setting secrets in serverless.yml: https://bref.sh/docs/environment/variables.html#secrets
+        TIDEWAYS_APIKEY: ${env:TIDEWAYS_APIKEY}
+        # Name of the service, used in the Tideways UI
+        # https://support.tideways.com/documentation/setup/configuration/services.html
+        TIDEWAYS_SERVICE: ${self:service}
+        # We point the PHP extension to the Tideways daemon EC2 server
+        TIDEWAYS_CONNECTION: !Sub "tcp://${TidewaysDaemon.PrivateIp}:9135"
+        # 100% sample rate for the example, adjust to your needs
+        # https://support.tideways.com/documentation/setup/configuration/sampling.html
+        TIDEWAYS_SAMPLERATE: 100
+
+functions:
+    api:
+        handler: index.php
+        layers:
+            - ${bref:layer.php-80-fpm}
+            # Include the Tideways PHP extension
+            - ${bref-extra:tideways-php-80}
+        url: true
+
+custom:
+    # The configuration that deploys our VPC (virtual private network)
+    vpcConfig:
+        # For simplicity in this example we don't create subnets for
+        # databases, redis, etc.
+        # https://github.com/smoketurner/serverless-vpc-plugin
+        subnetGroups: []
+        # For the example we don't create NAT Gateways so that costs are $0
+        # but if you need to access the internet from your Lambda functions you
+        # will probably need to set this to true
+        # https://bref.sh/docs/environment/database.html#accessing-the-internet
+        createNatGateway: false
+
+package:
+    patterns:
+        - '!node_modules/**'
+
+plugins:
+    - ./vendor/bref/bref
+    - ./vendor/bref/extra-php-extensions
+    - serverless-vpc-plugin
+
+resources:
+    Resources:
+
+        # Create an EC2 instance that runs the Tideways daemon
+        TidewaysDaemon:
+            Type: AWS::EC2::Instance
+            Properties:
+                # Find the AMI ID for your region here: https://github.com/tideways/tideways-daemon-ami#readme
+                ImageId: ami-0f47ce7e3644a8c3f
+                # t2.micro is a small instance eligible for the free tier
+                InstanceType: t2.micro
+                # If you want to SSH into the instance later, set up a key pair
+                # KeyName: ...
+                NetworkInterfaces:
+                    -   AssociatePublicIpAddress: true
+                        DeleteOnTermination: true
+                        DeviceIndex: '0'
+                        # Put it in one of the "public" subnet created by the serverless-vpc-plugin
+                        SubnetId: !Ref PublicSubnet1
+                        GroupSet:
+                            -   !GetAtt TidewaysDaemonSecurityGroup.GroupId
+                # Set the TIDEWAYS_ENVIRONMENT based on the application stage (via an environment variable)
+                # https://support.tideways.com/documentation/setup/configuration/environments.html#configuration-in-the-daemon
+                UserData: !Base64 |
+                    #!/bin/bash -xe
+                    TIDEWAYS_ENVIRONMENT=${sls:stage}
+                Tags:
+                    -   Key: Name
+                        Value: Tideways daemon for ${self:service}-${sls:stage}
+
+        # Security group for the EC2 daemon
+        TidewaysDaemonSecurityGroup:
+            Type: AWS::EC2::SecurityGroup
+            Properties:
+                VpcId: !Ref VPC
+                GroupName: ${self:service}-${sls:stage}-tideways-daemon
+                GroupDescription: Secure access to the Tideways daemon
+                SecurityGroupIngress:
+                    # Allow inbound connections from the Lambda functions to the daemon
+                    -   IpProtocol: tcp
+                        FromPort: 9135
+                        ToPort: 9135
+                        Description: Open the Tideways daemon port to Lambda only
+                        # This dynamically references the security group of the Lambda functions
+                        SourceSecurityGroupId: !Ref AppSecurityGroup
+                    # Uncomment to allow connecting via SSH
+                    #-   IpProtocol: tcp
+                    #    FromPort: 22
+                    #    ToPort: 22
+                    #    CidrIp: 0.0.0.0/0
+                Tags:
+                    -   Key: Name
+                        Value: Tideways daemon for ${self:service}-${sls:stage}
+
+        # The rule above ("allow inbound" from daemon) is not enough. We also must allow
+        # outbound connections from Lambda (to the daemon).
+        AppSecurityGroupEgress:
+            Type: AWS::EC2::SecurityGroupEgress
+            Properties:
+                Description: Allow Lambda functions to connect to the Tideways daemon
+                GroupId: !GetAtt AppSecurityGroup.GroupId
+                IpProtocol: tcp
+                FromPort: 9135
+                ToPort: 9135
+                DestinationSecurityGroupId: !GetAtt TidewaysDaemonSecurityGroup.GroupId

@@ -1,0 +1,5 @@
+{
+  "devDependencies": {
+    "serverless-vpc-plugin": "^1.0.5"
+  }
+}

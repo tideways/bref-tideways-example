@@ -1,0 +1,12 @@
+{
+    "require": {
+        "php": "^8.0",
+        "bref/bref": "^1.7",
+        "bref/extra-php-extensions": "^0.12"
+    },
+    "config": {
+        "platform": {
+            "php": "8.0.0"
+        }
+    }
+}
