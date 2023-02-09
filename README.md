@@ -25,6 +25,8 @@ npm install
 
 Edit `serverless.yml` to set your `TIDEWAYS_APIKEY` (or set it as an environment variable on your machine).
 
+If you wish to deploy to a different region than the one set in `serverless.yml`, update the `provider.region` field as well as the `ImageId` field in the `TidewaysDaemon` section: you can find out the AMI ID (aka image ID) for your preferred region [on this page](https://github.com/tideways/tideways-daemon-ami#readme).
+
 Then, deploy the application:
 
 ```bash
